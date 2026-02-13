@@ -6,9 +6,9 @@ from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Supabase Countdown", layout="wide")
 
-# =============================
-# DATABASE CONNECTION (CACHED)
-# =============================
+# =====================================================
+# OPTIMIZED DATABASE CONNECTION (CACHED)
+# =====================================================
 @st.cache_resource
 def get_connection():
     conn = psycopg2.connect(
@@ -20,20 +20,19 @@ def get_connection():
 
 conn = get_connection()
 
-
 def get_cursor():
     return conn.cursor()
 
-# =============================
+# =====================================================
 # HELPERS
-# =============================
+# =====================================================
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def create_user(username, password):
     try:
-        cursor = get_cursor()
-        cursor.execute(
+        cur = get_cursor()
+        cur.execute(
             "INSERT INTO users (username, password) VALUES (%s, %s)",
             (username, hash_password(password))
         )
@@ -42,48 +41,47 @@ def create_user(username, password):
         return False
 
 def login_user(username, password):
-    cursor = get_cursor()
-    cursor.execute(
+    cur = get_cursor()
+    cur.execute(
         "SELECT * FROM users WHERE username=%s AND password=%s",
         (username, hash_password(password))
     )
-    return cursor.fetchone()
+    return cur.fetchone()
 
 def get_user_by_id(user_id):
-    cursor = get_cursor()
-    cursor.execute("SELECT * FROM users WHERE id=%s", (user_id,))
-    return cursor.fetchone()
+    cur = get_cursor()
+    cur.execute("SELECT * FROM users WHERE id=%s", (user_id,))
+    return cur.fetchone()
 
 def change_password(user_id, new_password):
-    cursor = get_cursor()
-    cursor.execute(
+    cur = get_cursor()
+    cur.execute(
         "UPDATE users SET password=%s WHERE id=%s",
         (hash_password(new_password), user_id)
     )
 
 def delete_account(user_id):
-    cursor = get_cursor()
-    cursor.execute("DELETE FROM users WHERE id=%s", (user_id,))
+    cur = get_cursor()
+    cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
 
 def add_countdown(user_id, title, target):
     try:
-        cursor = get_cursor()
-        cursor.execute(
+        cur = get_cursor()
+        cur.execute(
             """
             INSERT INTO countdowns (user_id, title, created_at, target)
             VALUES (%s, %s, %s, %s)
             """,
             (user_id, title, datetime.now(), target)
         )
-        st.cache_data.clear()
         return True
     except:
         return False
 
 def update_countdown(cid, user_id, title, target):
     try:
-        cursor = get_cursor()
-        cursor.execute(
+        cur = get_cursor()
+        cur.execute(
             """
             UPDATE countdowns
             SET title=%s, target=%s
@@ -91,23 +89,25 @@ def update_countdown(cid, user_id, title, target):
             """,
             (title, target, cid, user_id)
         )
-        st.cache_data.clear()
         return True
     except:
         return False
 
 def delete_countdown(cid):
-    cursor = get_cursor()
-    cursor.execute("DELETE FROM countdowns WHERE id=%s", (cid,))
-    st.cache_data.clear()
+    cur = get_cursor()
+    cur.execute("DELETE FROM countdowns WHERE id=%s", (cid,))
 
-# =============================
-# CACHED QUERY (FAST LOAD)
-# =============================
+def get_countdown_by_id(cid):
+    cur = get_cursor()
+    cur.execute("SELECT * FROM countdowns WHERE id=%s", (cid,))
+    return cur.fetchone()
+
+# =====================================================
+# CACHED COUNTDOWN QUERY (reduces DB load)
+# =====================================================
 @st.cache_data(ttl=5)
 def get_filtered_countdowns(user_id, search_query, filter_option):
-
-    cursor = get_cursor()
+    cur = get_cursor()
 
     query = "SELECT * FROM countdowns WHERE user_id=%s"
     params = [user_id]
@@ -127,21 +127,24 @@ def get_filtered_countdowns(user_id, search_query, filter_option):
 
     query += " ORDER BY target ASC"
 
-    cursor.execute(query, tuple(params))
-    return cursor.fetchall()
+    cur.execute(query, tuple(params))
+    return cur.fetchall()
 
-# =============================
+# =====================================================
 # SESSION INIT
-# =============================
+# =====================================================
 if "user" not in st.session_state:
     st.session_state.user = None
 
 if "edit_id" not in st.session_state:
     st.session_state.edit_id = None
 
-# =============================
+if "edit_data" not in st.session_state:
+    st.session_state.edit_data = None
+
+# =====================================================
 # AUTH SECTION
-# =============================
+# =====================================================
 if not st.session_state.user:
 
     st.title("🔐 Login / Register")
@@ -166,59 +169,78 @@ if not st.session_state.user:
             else:
                 st.error("Invalid credentials.")
 
-# =============================
+# =====================================================
 # DASHBOARD
-# =============================
+# =====================================================
 else:
 
     user_id = st.session_state.user[0]
     username = st.session_state.user[1]
 
+    if not get_user_by_id(user_id):
+        st.session_state.user = None
+        st.rerun()
+
     st.title(f"⏳ Welcome, {username}")
 
-    col1, col2 = st.columns([1, 1])
+    colA, colB, colC = st.columns(3)
 
-    with col1:
+    with colA:
         if st.button("Logout"):
             st.session_state.user = None
             st.rerun()
 
-    with col2:
+    with colB:
+        with st.expander("🔑 Change Password"):
+            current_pass = st.text_input("Current Password", type="password")
+            new_pass = st.text_input("New Password", type="password")
+
+            if st.button("Update Password"):
+                stored_hash = get_user_by_id(user_id)[2]
+                if hash_password(current_pass) != stored_hash:
+                    st.error("Current password incorrect.")
+                elif not new_pass:
+                    st.error("New password cannot be empty.")
+                else:
+                    change_password(user_id, new_pass)
+                    st.success("Password updated.")
+
+    with colC:
         with st.expander("⚠ Delete Account"):
-            confirm = st.text_input("Enter Password", type="password")
+            confirm_pass = st.text_input("Enter Password", type="password")
+            confirm_check = st.checkbox("I understand this is permanent.")
+
             if st.button("Delete My Account"):
                 stored_hash = get_user_by_id(user_id)[2]
-                if hash_password(confirm) == stored_hash:
+                if hash_password(confirm_pass) != stored_hash:
+                    st.error("Password incorrect.")
+                elif not confirm_check:
+                    st.error("Please confirm deletion.")
+                else:
                     delete_account(user_id)
                     st.session_state.user = None
                     st.success("Account deleted.")
                     st.rerun()
-                else:
-                    st.error("Incorrect password.")
 
     # Sidebar
     st.sidebar.header("🔎 Search & Filter")
     search_query = st.sidebar.text_input("Search by Title")
-    filter_option = st.sidebar.selectbox(
-        "Filter by Status",
-        ["All", "Active", "Expired"]
-    )
+    filter_option = st.sidebar.selectbox("Filter by Status", ["All", "Active", "Expired"])
 
-    # Add Countdown
-    with st.expander("➕ Add Countdown", expanded=True):
+    # Add/Edit Countdown
+    with st.expander("➕ Add / Edit Countdown", expanded=True):
 
         title = st.text_input("Title")
+
         selected_date = st.date_input("Date", min_value=date.today())
 
-        colA, colB, colC = st.columns(3)
-        with colA:
-            hour = st.selectbox("Hour", list(range(0, 24)))
-        with colB:
-            minute = st.selectbox("Minute", list(range(0, 60)))
-        with colC:
-            second = st.selectbox("Second", list(range(0, 60)))
+        col1, col2, col3 = st.columns(3)
+        hour = col1.selectbox("Hour", list(range(0, 24)))
+        minute = col2.selectbox("Minute", list(range(0, 60)))
+        second = col3.selectbox("Second", list(range(0, 60)))
 
         if st.button("Save Countdown"):
+
             target_dt = datetime(
                 selected_date.year,
                 selected_date.month,
@@ -231,39 +253,62 @@ else:
             if target_dt <= datetime.now():
                 st.error("Cannot select past time.")
             else:
-                if not add_countdown(user_id, title, target_dt):
+                success = add_countdown(user_id, title, target_dt)
+                if not success:
                     st.error("Title must be unique per user.")
                 else:
-                    st.success("Countdown added.")
+                    st.cache_data.clear()
                     st.rerun()
 
-    # Display Countdowns
+    # Display
     st.subheader("📅 Your Countdowns")
 
-    countdowns = get_filtered_countdowns(
-        user_id,
-        search_query,
-        filter_option
-    )
+    countdowns = get_filtered_countdowns(user_id, search_query, filter_option)
 
-    for item in countdowns:
+    for cid, uid, title, created_at, target in countdowns:
 
-        cid, uid, title, created_at, target = item
         now = datetime.now()
         diff = target - now
 
-        st.markdown(f"### {title}")
+        col1, col2 = st.columns([8,1])
 
-        if diff.total_seconds() > 0:
+        with col1:
+            st.markdown(f"### {title}")
 
-            days = diff.days
-            hours, rem = divmod(diff.seconds, 3600)
-            minutes, seconds = divmod(rem, 60)
+            if diff.total_seconds() > 0:
 
-            st.write(f"{days}d {hours}h {minutes}m {seconds}s remaining")
+                days = diff.days
+                hours, rem = divmod(diff.seconds, 3600)
+                minutes, seconds = divmod(rem, 60)
+                st.write(f"{days}d {hours}h {minutes}m {seconds}s remaining")
 
-        else:
-            st.error("⏰ Time's Up!")
+                total = (target - created_at).total_seconds()
+                elapsed = (now - created_at).total_seconds()
+                progress = min(max(elapsed / total, 0), 1)
+                percent = int(progress * 100)
 
-    # Reduced refresh frequency (faster)
+                remaining_ratio = 1 - progress
+                color = "#2ea043" if remaining_ratio > 0.5 else "#d29922" if remaining_ratio > 0.2 else "#cf222e"
+
+                st.markdown(f"""
+                <div style="display:flex;align-items:center;gap:12px;">
+                    <div style="flex-grow:1;background:#e1e4e8;border-radius:6px;height:12px;">
+                        <div style="width:{percent}%;background:{color};height:100%;border-radius:6px;"></div>
+                    </div>
+                    <div style="min-width:50px;text-align:right;font-weight:600;">
+                        {percent}%
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            else:
+                st.error("⏰ Time's Up!")
+
+        with col2:
+            if st.button("🗑", key=f"del_{cid}"):
+                delete_countdown(cid)
+                st.cache_data.clear()
+                st.rerun()
+
+    # Optimized refresh (5 seconds)
     st_autorefresh(interval=5000, key="refresh")
