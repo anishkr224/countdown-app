@@ -6,9 +6,9 @@ from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Supabase Countdown", layout="wide")
 
-# =====================================================
-# OPTIMIZED DATABASE CONNECTION (CACHED)
-# =====================================================
+# ==========================================================
+# DATABASE CONNECTION (CACHED - FAST)
+# ==========================================================
 @st.cache_resource
 def get_connection():
     conn = psycopg2.connect(
@@ -23,12 +23,15 @@ conn = get_connection()
 def get_cursor():
     return conn.cursor()
 
-# =====================================================
-# HELPERS
-# =====================================================
+# ==========================================================
+# PASSWORD HASHING
+# ==========================================================
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
+# ==========================================================
+# USER FUNCTIONS
+# ==========================================================
 def create_user(username, password):
     try:
         cur = get_cursor()
@@ -64,6 +67,9 @@ def delete_account(user_id):
     cur = get_cursor()
     cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
 
+# ==========================================================
+# COUNTDOWN FUNCTIONS
+# ==========================================================
 def add_countdown(user_id, title, target):
     try:
         cur = get_cursor()
@@ -76,7 +82,7 @@ def add_countdown(user_id, title, target):
         )
         return True
     except:
-        return False
+        return False  # handles UNIQUE(user_id, title)
 
 def update_countdown(cid, user_id, title, target):
     try:
@@ -102,9 +108,9 @@ def get_countdown_by_id(cid):
     cur.execute("SELECT * FROM countdowns WHERE id=%s", (cid,))
     return cur.fetchone()
 
-# =====================================================
-# CACHED COUNTDOWN QUERY (reduces DB load)
-# =====================================================
+# ==========================================================
+# CACHED QUERY (5s TTL)
+# ==========================================================
 @st.cache_data(ttl=5)
 def get_filtered_countdowns(user_id, search_query, filter_option):
     cur = get_cursor()
@@ -130,9 +136,9 @@ def get_filtered_countdowns(user_id, search_query, filter_option):
     cur.execute(query, tuple(params))
     return cur.fetchall()
 
-# =====================================================
+# ==========================================================
 # SESSION INIT
-# =====================================================
+# ==========================================================
 if "user" not in st.session_state:
     st.session_state.user = None
 
@@ -142,9 +148,9 @@ if "edit_id" not in st.session_state:
 if "edit_data" not in st.session_state:
     st.session_state.edit_data = None
 
-# =====================================================
+# ==========================================================
 # AUTH SECTION
-# =====================================================
+# ==========================================================
 if not st.session_state.user:
 
     st.title("🔐 Login / Register")
@@ -169,20 +175,24 @@ if not st.session_state.user:
             else:
                 st.error("Invalid credentials.")
 
-# =====================================================
+# ==========================================================
 # DASHBOARD
-# =====================================================
+# ==========================================================
 else:
 
     user_id = st.session_state.user[0]
     username = st.session_state.user[1]
 
+    # SESSION VALIDATION
     if not get_user_by_id(user_id):
         st.session_state.user = None
         st.rerun()
 
     st.title(f"⏳ Welcome, {username}")
 
+    # ======================================================
+    # ACCOUNT MANAGEMENT
+    # ======================================================
     colA, colB, colC = st.columns(3)
 
     with colA:
@@ -222,22 +232,60 @@ else:
                     st.success("Account deleted.")
                     st.rerun()
 
-    # Sidebar
+    # ======================================================
+    # HANDLE EDIT PREFILL
+    # ======================================================
+    if st.session_state.edit_id and not st.session_state.edit_data:
+        record = get_countdown_by_id(st.session_state.edit_id)
+        if record:
+            _, _, title, created_at, target = record
+            st.session_state.edit_data = {
+                "title": title,
+                "date": target.date(),
+                "hour": target.hour,
+                "minute": target.minute,
+                "second": target.second
+            }
+
+    # ======================================================
+    # SIDEBAR FILTERS
+    # ======================================================
     st.sidebar.header("🔎 Search & Filter")
     search_query = st.sidebar.text_input("Search by Title")
-    filter_option = st.sidebar.selectbox("Filter by Status", ["All", "Active", "Expired"])
+    filter_option = st.sidebar.selectbox(
+        "Filter by Status",
+        ["All", "Active", "Expired"]
+    )
 
-    # Add/Edit Countdown
+    # ======================================================
+    # ADD / EDIT COUNTDOWN
+    # ======================================================
     with st.expander("➕ Add / Edit Countdown", expanded=True):
 
-        title = st.text_input("Title")
+        default_title = ""
+        default_date = date.today()
+        default_hour = 0
+        default_minute = 0
+        default_second = 0
 
-        selected_date = st.date_input("Date", min_value=date.today())
+        if st.session_state.edit_data:
+            default_title = st.session_state.edit_data["title"]
+            default_date = st.session_state.edit_data["date"]
+            default_hour = st.session_state.edit_data["hour"]
+            default_minute = st.session_state.edit_data["minute"]
+            default_second = st.session_state.edit_data["second"]
+
+        title = st.text_input("Title", value=default_title)
+        selected_date = st.date_input(
+            "Date",
+            value=default_date,
+            min_value=date.today()
+        )
 
         col1, col2, col3 = st.columns(3)
-        hour = col1.selectbox("Hour", list(range(0, 24)))
-        minute = col2.selectbox("Minute", list(range(0, 60)))
-        second = col3.selectbox("Second", list(range(0, 60)))
+        hour = col1.selectbox("Hour", list(range(0, 24)), index=default_hour)
+        minute = col2.selectbox("Minute", list(range(0, 60)), index=default_minute)
+        second = col3.selectbox("Second", list(range(0, 60)), index=default_second)
 
         if st.button("Save Countdown"):
 
@@ -253,24 +301,41 @@ else:
             if target_dt <= datetime.now():
                 st.error("Cannot select past time.")
             else:
-                success = add_countdown(user_id, title, target_dt)
+                if st.session_state.edit_id:
+                    success = update_countdown(
+                        st.session_state.edit_id,
+                        user_id,
+                        title,
+                        target_dt
+                    )
+                else:
+                    success = add_countdown(user_id, title, target_dt)
+
                 if not success:
                     st.error("Title must be unique per user.")
                 else:
+                    st.session_state.edit_id = None
+                    st.session_state.edit_data = None
                     st.cache_data.clear()
                     st.rerun()
 
-    # Display
+    # ======================================================
+    # DISPLAY COUNTDOWNS
+    # ======================================================
     st.subheader("📅 Your Countdowns")
 
-    countdowns = get_filtered_countdowns(user_id, search_query, filter_option)
+    countdowns = get_filtered_countdowns(
+        user_id,
+        search_query,
+        filter_option
+    )
 
     for cid, uid, title, created_at, target in countdowns:
 
         now = datetime.now()
         diff = target - now
 
-        col1, col2 = st.columns([8,1])
+        col1, col2, col3 = st.columns([6,1,1])
 
         with col1:
             st.markdown(f"### {title}")
@@ -288,27 +353,42 @@ else:
                 percent = int(progress * 100)
 
                 remaining_ratio = 1 - progress
-                color = "#2ea043" if remaining_ratio > 0.5 else "#d29922" if remaining_ratio > 0.2 else "#cf222e"
 
-                st.markdown(f"""
-                <div style="display:flex;align-items:center;gap:12px;">
-                    <div style="flex-grow:1;background:#e1e4e8;border-radius:6px;height:12px;">
-                        <div style="width:{percent}%;background:{color};height:100%;border-radius:6px;"></div>
+                if remaining_ratio > 0.5:
+                    color = "#2ea043"
+                elif remaining_ratio > 0.2:
+                    color = "#d29922"
+                else:
+                    color = "#cf222e"
+
+                st.markdown(
+                    f"""
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <div style="flex-grow:1;background:#e1e4e8;border-radius:6px;height:12px;">
+                            <div style="width:{percent}%;background:{color};height:100%;border-radius:6px;"></div>
+                        </div>
+                        <div style="min-width:50px;text-align:right;font-weight:600;">
+                            {percent}%
+                        </div>
                     </div>
-                    <div style="min-width:50px;text-align:right;font-weight:600;">
-                        {percent}%
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    """,
+                    unsafe_allow_html=True
+                )
 
             else:
                 st.error("⏰ Time's Up!")
 
         with col2:
+            if st.button("✏", key=f"edit_{cid}"):
+                st.session_state.edit_id = cid
+                st.session_state.edit_data = None
+                st.rerun()
+
+        with col3:
             if st.button("🗑", key=f"del_{cid}"):
                 delete_countdown(cid)
                 st.cache_data.clear()
                 st.rerun()
 
-    # Optimized refresh (5 seconds)
+    # OPTIMIZED REFRESH (5 seconds)
     st_autorefresh(interval=5000, key="refresh")
