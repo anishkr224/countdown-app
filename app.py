@@ -12,7 +12,7 @@ st.set_page_config(page_title="Supabase Countdown", layout="wide")
 # ==========================================================
 IST = pytz.timezone("Asia/Kolkata")
 
-def current_time():
+def get_now():
     return datetime.now(IST)
 
 # ==========================================================
@@ -87,7 +87,7 @@ def add_countdown(user_id, title, target):
             INSERT INTO countdowns (user_id, title, created_at, target)
             VALUES (%s, %s, %s, %s)
             """,
-            (user_id, title, current_time(), target)
+            (user_id, title, get_now(), target)
         )
         return True
     except:
@@ -118,7 +118,7 @@ def get_countdown_by_id(cid):
     return cur.fetchone()
 
 # ==========================================================
-# CACHED QUERY
+# CACHED QUERY (5s TTL)
 # ==========================================================
 @st.cache_data(ttl=5)
 def get_filtered_countdowns(user_id, search_query, filter_option):
@@ -131,14 +131,14 @@ def get_filtered_countdowns(user_id, search_query, filter_option):
         query += " AND LOWER(title) LIKE %s"
         params.append(f"%{search_query.lower()}%")
 
-    now_time = current_time()
+    current_time = get_now()
 
     if filter_option == "Active":
         query += " AND target > %s"
-        params.append(now_time)
+        params.append(current_time)
     elif filter_option == "Expired":
         query += " AND target <= %s"
-        params.append(now_time)
+        params.append(current_time)
 
     query += " ORDER BY target ASC"
 
@@ -198,7 +198,6 @@ else:
 
     st.title(f"⏳ Welcome, {username}")
 
-    # Sidebar
     st.sidebar.header("🔎 Search & Filter")
     search_query = st.sidebar.text_input("Search by Title")
     filter_option = st.sidebar.selectbox(
@@ -219,16 +218,18 @@ else:
 
         if st.button("Save Countdown"):
 
-            target_dt = IST.localize(datetime(
+            naive_dt = datetime(
                 selected_date.year,
                 selected_date.month,
                 selected_date.day,
                 hour,
                 minute,
                 second
-            ))
+            )
 
-            if target_dt <= current_time():
+            target_dt = IST.localize(naive_dt)
+
+            if target_dt <= get_now():
                 st.error("Cannot select past time.")
             else:
                 success = add_countdown(user_id, title, target_dt)
@@ -249,7 +250,8 @@ else:
 
     for cid, uid, title, created_at, target in countdowns:
 
-        diff = target - current_time()
+        current_time = get_now()
+        diff = target - current_time
 
         st.markdown(f"### {title}")
 
@@ -261,7 +263,7 @@ else:
             st.write(f"{days}d {hours}h {minutes}m {seconds}s remaining")
 
             total = (target - created_at).total_seconds()
-            elapsed = (current_time() - created_at).total_seconds()
+            elapsed = (current_time - created_at).total_seconds()
             progress = min(max(elapsed / total, 0), 1)
             percent = int(progress * 100)
 
