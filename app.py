@@ -8,12 +8,18 @@ import pytz
 st.set_page_config(page_title="Supabase Countdown", layout="wide")
 
 # ==========================================================
-# TIMEZONE CONFIG (IST)
+# TIMEZONES
 # ==========================================================
+UTC = pytz.utc
 IST = pytz.timezone("Asia/Kolkata")
 
-def get_now():
-    return datetime.now(IST)
+def utc_now():
+    return datetime.now(UTC)
+
+def to_ist(dt):
+    if dt.tzinfo is None:
+        dt = UTC.localize(dt)
+    return dt.astimezone(IST)
 
 # ==========================================================
 # DATABASE CONNECTION (CACHED)
@@ -79,7 +85,7 @@ def delete_account(user_id):
 # ==========================================================
 # COUNTDOWN FUNCTIONS
 # ==========================================================
-def add_countdown(user_id, title, target):
+def add_countdown(user_id, title, target_utc):
     try:
         cur = get_cursor()
         cur.execute(
@@ -87,13 +93,13 @@ def add_countdown(user_id, title, target):
             INSERT INTO countdowns (user_id, title, created_at, target)
             VALUES (%s, %s, %s, %s)
             """,
-            (user_id, title, get_now(), target)
+            (user_id, title, utc_now(), target_utc)
         )
         return True
     except:
         return False
 
-def update_countdown(cid, user_id, title, target):
+def update_countdown(cid, user_id, title, target_utc):
     try:
         cur = get_cursor()
         cur.execute(
@@ -102,7 +108,7 @@ def update_countdown(cid, user_id, title, target):
             SET title=%s, target=%s
             WHERE id=%s AND user_id=%s
             """,
-            (title, target, cid, user_id)
+            (title, target_utc, cid, user_id)
         )
         return True
     except:
@@ -131,7 +137,7 @@ def get_filtered_countdowns(user_id, search_query, filter_option):
         query += " AND LOWER(title) LIKE %s"
         params.append(f"%{search_query.lower()}%")
 
-    current_time = get_now()
+    current_time = utc_now()
 
     if filter_option == "Active":
         query += " AND target > %s"
@@ -198,6 +204,7 @@ else:
 
     st.title(f"⏳ Welcome, {username}")
 
+    # Sidebar
     st.sidebar.header("🔎 Search & Filter")
     search_query = st.sidebar.text_input("Search by Title")
     filter_option = st.sidebar.selectbox(
@@ -218,7 +225,7 @@ else:
 
         if st.button("Save Countdown"):
 
-            naive_dt = datetime(
+            naive_local = datetime(
                 selected_date.year,
                 selected_date.month,
                 selected_date.day,
@@ -227,19 +234,21 @@ else:
                 second
             )
 
-            target_dt = IST.localize(naive_dt)
+            # Assume user selects IST → convert to UTC
+            ist_dt = IST.localize(naive_local)
+            target_utc = ist_dt.astimezone(UTC)
 
-            if target_dt <= get_now():
+            if target_utc <= utc_now():
                 st.error("Cannot select past time.")
             else:
-                success = add_countdown(user_id, title, target_dt)
+                success = add_countdown(user_id, title, target_utc)
                 if not success:
                     st.error("Title must be unique per user.")
                 else:
                     st.cache_data.clear()
                     st.rerun()
 
-    # Display
+    # Display Countdowns
     st.subheader("📅 Your Countdowns")
 
     countdowns = get_filtered_countdowns(
@@ -250,7 +259,10 @@ else:
 
     for cid, uid, title, created_at, target in countdowns:
 
-        current_time = get_now()
+        target = to_ist(target)
+        created_at = to_ist(created_at)
+
+        current_time = to_ist(utc_now())
         diff = target - current_time
 
         st.markdown(f"### {title}")
