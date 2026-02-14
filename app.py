@@ -3,8 +3,17 @@ import psycopg2
 import hashlib
 from datetime import datetime, date
 from streamlit_autorefresh import st_autorefresh
+import pytz
 
 st.set_page_config(page_title="Supabase Countdown", layout="wide")
+
+# ==========================================================
+# TIMEZONE CONFIG (INDIA - IST)
+# ==========================================================
+IST = pytz.timezone("Asia/Kolkata")
+
+def now():
+    return datetime.now(IST)
 
 # ==========================================================
 # DATABASE CONNECTION (CACHED - FAST)
@@ -78,7 +87,7 @@ def add_countdown(user_id, title, target):
             INSERT INTO countdowns (user_id, title, created_at, target)
             VALUES (%s, %s, %s, %s)
             """,
-            (user_id, title, datetime.now(), target)
+            (user_id, title, now(), target)
         )
         return True
     except:
@@ -122,7 +131,7 @@ def get_filtered_countdowns(user_id, search_query, filter_option):
         query += " AND LOWER(title) LIKE %s"
         params.append(f"%{search_query.lower()}%")
 
-    now = datetime.now()
+    now = now()
 
     if filter_option == "Active":
         query += " AND target > %s"
@@ -298,7 +307,7 @@ else:
                 second
             )
 
-            if target_dt <= datetime.now():
+            if target_dt <= now():
                 st.error("Cannot select past time.")
             else:
                 if st.session_state.edit_id:
@@ -332,7 +341,7 @@ else:
 
     for cid, uid, title, created_at, target in countdowns:
 
-        now = datetime.now()
+        now = now()
         diff = target - now
 
         col1, col2, col3 = st.columns([6,1,1])
