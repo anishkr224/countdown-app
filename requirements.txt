@@ -1,3 +1,4 @@
 streamlit
 streamlit-autorefresh
 psycopg2-binary
+pytz
